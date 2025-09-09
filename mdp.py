@@ -26,6 +26,7 @@ class MDP(ABC):
 
     def step(self, s: State, a: Action, rng) -> Tuple[State, float]:
         if self.is_terminal(s):
+            
             return s, 0.0
 
         dist = self.transition(s, a)
@@ -37,4 +38,5 @@ class MDP(ABC):
         probs = [p for _, p in dist]
         idx = rng.choice(len(dist), p=probs)
         ns = dist[idx][0]
+
         return ns, self.reward(ns)

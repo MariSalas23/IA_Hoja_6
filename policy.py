@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 import numpy as np
 from solution.mdp import MDP, State, Action
 
-
 class Policy(ABC):
     """Callable policy base: policy(state, rng) -> action."""
 

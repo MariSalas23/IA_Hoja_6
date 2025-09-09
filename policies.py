@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from solution.policy import Policy
 from solution.lake_mdp import DOWN, RIGHT, Action, State
-
-
 class RandomPolicy(Policy):
     """Uniform over legal actions."""
 
     def _decision(self, s: State) -> Action:
-        # TODO: implement
+        actions = list(self.mdp.actions(s))
+        if not actions:
+            
+            return '⊥'
+        
+        idx = self.rng.integers(0, len(actions))
 
-
+        return actions[idx]
 class CustomPolicy(Policy):
     """
     Simple deterministic rule that avoids an immediate hole:
@@ -21,4 +24,55 @@ class CustomPolicy(Policy):
     """
 
     def _decision(self, s: State) -> Action:
-        # TODO: implement
+        actions = list(self.mdp.actions(s))
+        if not actions:
+            
+            return '⊥'
+
+        def neighbor(state: State, act: Action) -> State:
+            if not isinstance(state, tuple):
+               
+                return state
+            
+            r, c = state
+            if act == 'UP':
+                nr, nc = r - 1, c
+            elif act == 'DOWN':
+                nr, nc = r + 1, c
+            elif act == 'LEFT':
+                nr, nc = r, c - 1
+            elif act == 'RIGHT':
+                nr, nc = r, c + 1
+            else:
+                
+                return state
+           
+            if nr < 0 or nc < 0:
+                
+                return (r, c)
+            
+            return (nr, nc)
+
+        def is_hole_cell(cell: State) -> bool:
+   
+            try:
+                
+                return self.mdp.reward(cell) < 0
+            
+            except Exception:
+                
+                return False
+
+        if DOWN in actions:
+            nb = neighbor(s, DOWN)
+            if not is_hole_cell(nb):
+                
+                return DOWN
+
+        if RIGHT in actions:
+            nb = neighbor(s, RIGHT)
+            if not is_hole_cell(nb):
+                
+                return RIGHT
+
+        return actions[0]
