@@ -5,41 +5,50 @@ from solution.lake_mdp import LakeMDP
 from solution.policies import RandomPolicy, CustomPolicy
 from solution.utility_analyzer import UtilityAnalyzer
 
-DEFAULT_MAP = ['SFFF', 'FHFH', 'FFFH', 'HFFG']
+DEFAULT_MAP = [  # Mapa por defecto
+    ['S', 'F', 'F', 'F'],
+    ['F', 'H', 'F', 'F'],
+    ['F', 'F', 'F', 'F'],
+    ['H', 'F', 'F', 'G'],
+]
 
 def evaluate_all(trials: int = 100, base_seed: int = 123):
-    """
-    Evaluate RandomPolicy and CustomPolicy for γ ∈ {0.5, 0.9, 1.0}.
-    Returns a JSON-serializable dict with summaries and the winner per γ.
-    """
-    report = {"n_trials": int(trials), "base_seed": int(base_seed), "gammas": {}}
+    # Prepara el reporte base
+    resumen = {"n_trials": int(trials), "base_seed": int(base_seed), "gammas": {}}
 
-    for gamma in (0.5, 0.9, 1.0):
-        mdp = LakeMDP(DEFAULT_MAP)
-        ua = UtilityAnalyzer(mdp=mdp, gamma=float(gamma), step_limit=100)
+    for g in (0.5, 0.9, 1.0):
+        # Crea el MDP y el analizador
+        problema = LakeMDP(DEFAULT_MAP)
+        analisis = UtilityAnalyzer(problema, gamma=float(g))
 
-        sum_rand = ua.evaluate(RandomPolicy, n_trials=int(trials), base_seed=int(base_seed))
-        sum_cust = ua.evaluate(CustomPolicy, n_trials=int(trials), base_seed=int(base_seed) + 10_000)
+        # Evalúa políticas con la misma configuración de semillas
+        stats_rand = analisis.evaluate(RandomPolicy, int(trials), base_seed=int(base_seed))
+        stats_custom = analisis.evaluate(CustomPolicy, int(trials), base_seed=int(base_seed))
 
-        mu_r = sum_rand.get("mean_utility", 0.0)
-        mu_c = sum_cust.get("mean_utility", 0.0)
+        ur, uc = stats_rand["mean_utility"], stats_custom["mean_utility"]
 
-        if abs(mu_r - mu_c) > 1e-12:
-            best = "custom" if mu_c > mu_r else "random"
+        # Selecciona ganador con desempates por varianza y prob de llegar a meta
+        if uc > ur:
+            ganador = "custom"
+        elif ur > uc:
+            ganador = "random"
         else:
-            vr = sum_rand.get("utility_variance", 0.0)
-            vc = sum_cust.get("utility_variance", 0.0)
+            vr, vc = stats_rand["utility_variance"], stats_custom["utility_variance"]
             if vc < vr:
-                best = "custom"
+                ganador = "custom"
             elif vr < vc:
-                best = "random"
+                ganador = "random"
             else:
-                best = "tie"
+                ganador = "custom" if stats_custom.get("p_goal", 0.0) >= stats_rand.get("p_goal", 0.0) else "random"
 
-        report["gammas"][str(gamma)] = {
-            "random": sum_rand,
-            "custom": sum_cust,
-            "winner": best,
+        resumen["gammas"][str(g)] = {
+            "random": stats_rand,
+            "custom": stats_custom,
+            "winner": ganador,
         }
 
-    return report
+    return resumen
+
+if __name__ == "__main__":
+    # Imprime el reporte en JSON
+    print(json.dumps(evaluate_all(), indent=2))

@@ -6,144 +6,181 @@ from solution.mdp import MDP, State, Action
 UP, RIGHT, DOWN, LEFT, ABSORB = "UP", "RIGHT", "DOWN", "LEFT", "⊥"
 
 class LakeMDP(MDP):
-    """
-    Grid map (matrix of single-character strings), e.g.:
-      [
-        ['S','F','F','F'],
-        ['F','H','F','F'],
-        ['F','F','F','F'],
-        ['H','F','F','G'],
-      ]
+    def __init__(self, grid: Iterable[Iterable[str]]):  # Normaliza la grilla
+        # Copia el grid como lista de listas
+        self.grid = [list(fila) for fila in grid]
+        if not self.grid or not self.grid[0]:
+            raise ValueError("Grid must be a non-empty matrix.")
 
-    Rewards are *state-entry* rewards. After entering H or G, the next state is
-    the absorbing state ⊥ with only legal action ⊥ and 0 reward forever.
-    """
+        # Tamaños de la grilla
+        self.nfilas = len(self.grid)
+        self.ncols = len(self.grid[0])
 
-    def __init__(self, grid: Iterable[Iterable[str]]): # Normalizar
-        self._grid: List[List[str]] = [list(row) for row in grid]
-        self._rows = len(self._grid)
-        if self._rows == 0:
-            raise ValueError("Empty grid.")
-        self._cols = len(self._grid[0])
-        for row in self._grid:
-            if len(row) != self._cols:
-                raise ValueError("Jagged grid.")
+        # Verifica que todas las filas tengan la misma longitud
+        for r in range(self.nfilas):
+            if len(self.grid[r]) != self.ncols:
+                raise ValueError("All grid rows must have the same length.")
 
-        starts = [(r, c) # Inicio
-                  for r in range(self._rows)
-                  for c in range(self._cols)
-                  if self._grid[r][c] == 'S']
-        if len(starts) != 1:
-            raise ValueError("Grid must contain exactly one 'S' start cell.")
-        self._start: Tuple[int, int] = starts[0]
+        # Ubicaciones clave
+        self._ini = None
+        self._meta = None
+        self._pozos = set()
 
-        self._terminals = {'H', 'G'} # Precompute terminal H y G
+        # Busca S, G y H
+        for r in range(self.nfilas):
+            for c in range(self.ncols):
+                ch = self.grid[r][c]
+                if ch == 'S':
+                    if self._ini is not None:
+                        raise ValueError("There must be exactly one start 'S'.")
+                    self._ini = (r, c)
+                elif ch == 'G':
+                    if self._meta is not None:
+                        raise ValueError("There must be exactly one goal 'G'.")
+                    self._meta = (r, c)
+                elif ch == 'H':
+                    self._pozos.add((r, c))
+                elif ch in ('F',):
+                    # Celda transitable
+                    pass
+                else:
+                    raise ValueError(f"Unknown cell type '{ch}' at {(r, c)}")
 
-        self._slip_probs = (0.8, 0.1, 0.1) # Movimientos
+        if self._ini is None:
+            raise ValueError("Missing start 'S' in grid.")
+        if self._meta is None:
+            raise ValueError("Missing goal 'G' in grid.")
 
-    # --- MDP interface -----------------------------------------------------
+    # ---------------------------- Interfaz MDP pública ----------------------------
+
     def start_state(self) -> State:
-
-        return self._start
+        # Retorna el estado inicial con etiqueta S
+        r, c = self._ini
+        return ((r, c), 'S')
 
     def actions(self, s: State) -> Iterable[Action]:
-        if s == '⊥': # ⊥ solo tiene acción ⊥
+        # Devuelve acciones válidas o ⊥ si es absorbente
+        if self.is_absorbed(s):
             return (ABSORB,)
-        # If we are currently standing on H/G, only ⊥ is legal.
-        if isinstance(s, tuple):
-            r, c = s
-            if self._grid[r][c] in self._terminals:
-                return (ABSORB,)
-
-        return (UP, RIGHT, DOWN, LEFT) # Movimientos válidos
+        if self._es_celda(s, 'H') or self._es_celda(s, 'G'):
+            return (ABSORB,)
+        return (UP, RIGHT, DOWN, LEFT)
 
     def reward(self, s: State) -> float:
-        if s == '⊥':
+        # Recompensa según tipo de celda
+        if self.is_absorbed(s):
             return 0.0
-        if not isinstance(s, tuple):
+        if self._es_celda(s, 'S'):
             return 0.0
-        r, c = s
-        cell = self._grid[r][c]
-        if cell == 'F':
+        if self._es_celda(s, 'F'):
             return 0.1
-        if cell == 'H':
+        if self._es_celda(s, 'H'):
             return -1.0
-        if cell == 'G':
+        if self._es_celda(s, 'G'):
             return 1.0
-        if cell == 'S':
- 
-            return 0.0 # No recompensa por entrar S
-
         return 0.0
 
     def is_terminal(self, s: State) -> bool:
-
-        return s == '⊥'
+        # Terminal si está absorbido
+        return self.is_absorbed(s)
 
     def transition(self, s: State, a: Action) -> List[Tuple[State, float]]:
-  
-        if s == '⊥': # Si ya está absorbiendo
-            return [('⊥', 1.0)]
+        # Transición estocástica con slippage lateral
+        if self.is_absorbed(s):
+            return [(self.absorb_state(), 1.0)]
+        if self._es_celda(s, 'H') or self._es_celda(s, 'G'):
+            return [(self.absorb_state(), 1.0)]
+        if a not in (UP, RIGHT, DOWN, LEFT):
+            # Acción inválida permanece en el estado
+            return [(s, 1.0)]
 
-        if isinstance(s, tuple):
+        principal = a
+        lat_izq, lat_der = self._laterales(a)
+        probas = ((principal, 0.8), (lat_izq, 0.1), (lat_der, 0.1))
+
+        acumulado: Dict[State, float] = {}
+        for act, p in probas:
+            ns = self.intended_next_state(s, act)
+            # Acumula probabilidades en el mismo estado destino
+            acumulado[ns] = acumulado.get(ns, 0.0) + p
+
+        return list(acumulado.items())
+
+    # --------------------------------- Helpers ---------------------------------
+
+    def absorb_state(self) -> State:
+        # Estado absorbente canónico
+        return (ABSORB, ABSORB)
+
+    def is_absorbed(self, s: State) -> bool:
+        # Verdadero si es el par (⊥, ⊥)
+        return isinstance(s, tuple) and len(s) == 2 and s[0] == ABSORB and s[1] == ABSORB
+
+    def _en_rango(self, r: int, c: int) -> bool:
+        # Verifica que esté dentro del tablero
+        return 0 <= r < self.nfilas and 0 <= c < self.ncols
+
+    def _laterales(self, a: Action):
+        # Retorna acciones laterales según la principal
+        if a in (UP, DOWN):
+            return (LEFT, RIGHT)
+        if a in (LEFT, RIGHT):
+            return (UP, DOWN)
+        return (UP, DOWN)
+
+    def is_goal(self, s: State) -> bool:
+        # Indica si es meta
+        return self._es_celda(s, 'G')
+
+    def is_cell(self, s: State) -> str:
+        # Devuelve letra de la celda actual
+        return self._tipo_celda(s)
+
+    def intended_next_state(self, s: State, a: Action) -> State:
+        # Movimiento determinista basado en la acción
+        if self.is_absorbed(s):
+            return self.absorb_state()
+
+        if isinstance(s, tuple) and len(s) == 2 and isinstance(s[0], tuple) and isinstance(s[1], str):
+            (r, c), _ = s
+        else:
+            # Soporta formato alterno
             r, c = s
-            cell = self._grid[r][c]
-            if cell in self._terminals:
 
-                return [('⊥', 1.0)]
-
-        if a == ABSORB:
-
-            return [(s, 1.0)]
-
-        intended, left_lateral, right_lateral = self._lateral_actions(a)
-        probs = self._slip_probs
-        moves = (intended, left_lateral, right_lateral)
-
-        outcomes: Dict[State, float] = {}
-        for mv, p in zip(moves, probs):
-            ns = self._move_with_bump(s, mv)
-            outcomes[ns] = outcomes.get(ns, 0.0) + p
-
-        total = sum(outcomes.values())
-        if total <= 0:
-
-            return [(s, 1.0)]
-        
-        return [(ns, p / total) for ns, p in outcomes.items()]
-
-    # --- helpers -----------------------------------------------------------
-    def _move_with_bump(self, s: State, a: Action) -> State:
-        if not isinstance(s, tuple):
-
-            return s
-        
-        r, c = s
         dr, dc = 0, 0
         if a == UP:
             dr, dc = -1, 0
+        elif a == RIGHT:
+            dr, dc = 0, 1
         elif a == DOWN:
             dr, dc = 1, 0
         elif a == LEFT:
             dr, dc = 0, -1
-        elif a == RIGHT:
-            dr, dc = 0, 1
+        else:
+            return s
+
         nr, nc = r + dr, c + dc
-        if 0 <= nr < self._rows and 0 <= nc < self._cols:
-            
-            return (nr, nc)
+        if not self._en_rango(nr, nc):
+            # Choque con borde mantiene estado
+            return s
 
-        return (r, c)
+        return ((nr, nc), self.grid[nr][nc])
 
-    def _lateral_actions(self, a: Action) -> Tuple[Action, Action, Action]:
-       
-        if a == UP:
-            return (UP, LEFT, RIGHT)
-        if a == DOWN:
-            return (DOWN, RIGHT, LEFT)
-        if a == LEFT:
-            return (LEFT, DOWN, UP)
-        if a == RIGHT:
-            return (RIGHT, UP, DOWN)
-        
-        return (a, a, a)  # Returna intended, lateral_left, lateral_right
+    def _tipo_celda(self, rc: State) -> str:
+        # Devuelve símbolo de celda o ⊥
+        if self.is_absorbed(rc):
+            return ABSORB
+
+        if isinstance(rc, tuple) and len(rc) == 2 and isinstance(rc[0], tuple) and isinstance(rc[1], str):
+            return rc[1]
+
+        r, c = rc
+        return self.grid[r][c]
+
+    def _es_celda(self, s: State, ch: str) -> bool:
+        # Compara la celda con un símbolo
+        return self._tipo_celda(s) == ch
+
+    def is_hole(self, s: State) -> bool:
+        # Indica si es un hoyo
+        return self._es_celda(s, 'H')
